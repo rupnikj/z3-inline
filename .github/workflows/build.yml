@@ -1,0 +1,141 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  Z3_VERSION: "4.15.8"
+  EMSDK_VERSION: "4.0.23"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache emsdk
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-z3-${{ env.Z3_VERSION }}-emsdk-${{ env.EMSDK_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            ccache-z3-${{ env.Z3_VERSION }}-emsdk-${{ env.EMSDK_VERSION }}-
+
+      - name: Setup emsdk (pinned)
+        run: |
+          sudo apt-get update && sudo apt-get install -y ccache
+          if [ ! -d emsdk/.git ]; then
+            git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git
+          fi
+          cd emsdk
+          ./emsdk install "$EMSDK_VERSION"
+          ./emsdk activate "$EMSDK_VERSION"
+
+      - name: Build Z3 (single-threaded wasm)
+        run: |
+          source emsdk/emsdk_env.sh
+          export CMAKE_EXTRA_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          bash scripts/build-z3.sh
+          ccache -s || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z3-st-dist
+          path: |
+            dist/z3-st.js
+            dist/z3-st.wasm
+            dist/build-info.json
+          if-no-files-found: error
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: z3-st-dist
+          path: dist
+      - name: Acceptance gates
+        run: node test/node-check.mjs
+
+  assemble:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: z3-st-dist
+          path: dist
+      - name: Assemble inline artifact
+        run: node tools/make-artifact.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z3-artifact
+          path: dist/z3-artifact.html
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: assemble
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: z3-st-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: z3-artifact
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/z3-st.js
+            dist/z3-st.wasm
+            dist/build-info.json
+            dist/z3-artifact.html
+
+  pages:
+    # Optional second target: same page on your own origin. Requires
+    # Settings -> Pages -> Source: GitHub Actions; harmless to fail otherwise.
+    if: github.ref == 'refs/heads/main'
+    needs: assemble
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: z3-artifact
+          path: site
+      - run: mv site/z3-artifact.html site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

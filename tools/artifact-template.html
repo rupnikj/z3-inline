@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Z3 Inline</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1a1a1a; --muted: #6b6b66;
+    --accent: #b05730; --border: #dcdcd5; --out-bg: #14140f; --out-ink: #d8d8cf;
+    --ok: #2e7d32; --err: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --panel: #1f1f24; --ink: #e8e8e2; --muted: #9a9a92;
+      --accent: #e08b5a; --border: #33333a; --out-bg: #0c0c0f; --out-ink: #cfcfc6;
+      --ok: #7bc67e; --err: #ef9a9a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+    padding: 1.25rem; max-width: 60rem; margin-inline: auto;
+  }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: .85rem; }
+  #status { color: var(--muted); font-size: .85rem; min-height: 1.3em; margin-bottom: 1rem; }
+  #status.err { color: var(--err); }
+  .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin: .6rem 0; }
+  textarea {
+    width: 100%; min-height: 11rem; resize: vertical;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px; padding: .7rem;
+  }
+  button, select, input[type=number] {
+    font: inherit; padding: .45rem .9rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=number] { width: 5.5rem; }
+  label { color: var(--muted); font-size: .85rem; }
+  pre#out {
+    background: var(--out-bg); color: var(--out-ink); border-radius: 8px;
+    padding: .8rem; min-height: 6rem; overflow-x: auto;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  pre#out .e { color: var(--err); }
+  #verdict { font-weight: 700; }
+  #verdict.sat { color: var(--ok); } #verdict.unsat { color: var(--accent); }
+  footer { margin-top: 1.2rem; color: var(--muted); font-size: .78rem; }
+</style>
+</head>
+<body>
+<h1>Z3 <small>v__Z3_VERSION__ &middot; single-threaded wasm, fully inline &middot; no network, no workers</small></h1>
+<div id="status">booting&hellip;</div>
+
+<div class="row">
+  <select id="examples">
+    <option value="">Load example&hellip;</option>
+    <option value="unsat">Unsat: x&gt;5 and x&lt;3</option>
+    <option value="model">Sat + model</option>
+    <option value="arith">Linear arithmetic</option>
+    <option value="eight-queens">Eight queens</option>
+  </select>
+  <label>timeout <input type="number" id="timeout" value="30" min="0"> s</label>
+  <span style="flex:1"></span>
+  <button id="reset" title="Discard the solver instance and start a fresh one">New solver</button>
+  <button id="run" class="primary" disabled>Run (Ctrl/Cmd+Enter)</button>
+</div>
+
+<textarea id="src" spellcheck="false" placeholder="; SMT-LIB 2 input"></textarea>
+
+<div class="row"><span id="verdict"></span><span id="timing" style="color:var(--muted);font-size:.85rem"></span></div>
+<pre id="out"></pre>
+
+<footer>
+  Z3 __Z3_VERSION__ compiled with Emscripten (-Oz, single-threaded, polling timer).
+  Payload: __PAYLOAD_NOTE__. The solver runs on the main thread &mdash; the page freezes
+  while solving; the timeout above is enforced by Z3 itself (-T).
+</footer>
+
+<script id="wasm-b64" type="text/plain">__WASM_B64__</script>
+<script>
+__GLUE_JS__
+</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), outEl = $("out"), runBtn = $("run");
+// Flip to false if a build's callMain cannot be re-invoked in one instance
+// (then every Run gets a fresh instance; costs ~1s but is always correct).
+const REUSE_INSTANCE = __REUSE_INSTANCE__;
+
+const EXAMPLES = {
+  unsat: "(declare-const x Int)\n(assert (> x 5))\n(assert (< x 3))\n(check-sat)\n",
+  model: "(declare-const x Int)\n(declare-const y Int)\n(assert (> x 5))\n(assert (= y (* x x)))\n(check-sat)\n(get-model)\n",
+  arith: "(declare-const a Int)\n(declare-const b Int)\n(assert (= (+ a b) 10))\n(assert (= (- a b) 4))\n(check-sat)\n(get-value (a b))\n",
+  "eight-queens": [
+    "; classic 8-queens as integer constraints",
+    "(declare-const q0 Int)(declare-const q1 Int)(declare-const q2 Int)(declare-const q3 Int)",
+    "(declare-const q4 Int)(declare-const q5 Int)(declare-const q6 Int)(declare-const q7 Int)",
+    "(assert (and (<= 0 q0 7)(<= 0 q1 7)(<= 0 q2 7)(<= 0 q3 7)(<= 0 q4 7)(<= 0 q5 7)(<= 0 q6 7)(<= 0 q7 7)))",
+    "(assert (distinct q0 q1 q2 q3 q4 q5 q6 q7))",
+    "(assert (distinct (- q0 0)(- q1 1)(- q2 2)(- q3 3)(- q4 4)(- q5 5)(- q6 6)(- q7 7)))",
+    "(assert (distinct (+ q0 0)(+ q1 1)(+ q2 2)(+ q3 3)(+ q4 4)(+ q5 5)(+ q6 6)(+ q7 7)))",
+    "(check-sat)",
+    "(get-value (q0 q1 q2 q3 q4 q5 q6 q7))",
+  ].join("\n") + "\n",
+};
+
+let wasmBytes = null, z3 = null, dirty = false;
+
+const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+const setStatus = (msg, isErr) => { statusEl.textContent = msg; statusEl.className = isErr ? "err" : ""; };
+function appendOut(line, isErr) {
+  const span = document.createElement("span");
+  if (isErr) span.className = "e";
+  span.textContent = line + "\n";
+  outEl.appendChild(span);
+}
+
+async function makeInstance() {
+  return createZ3({
+    wasmBinary: wasmBytes,
+    print: (l) => appendOut(l, false),
+    printErr: (l) => appendOut(l, true),
+    noInitialRun: true,
+  });
+}
+
+async function init() {
+  try {
+    const t0 = performance.now();
+    setStatus("decoding base64 payload…"); await paint();
+    const b64 = $("wasm-b64").textContent.trim();
+    const bin = atob(b64);
+    const gz = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) gz[i] = bin.charCodeAt(i);
+    const t1 = performance.now();
+    setStatus("gunzipping wasm…"); await paint();
+    const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+    wasmBytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    const t2 = performance.now();
+    setStatus("instantiating Z3…"); await paint();
+    z3 = await makeInstance();
+    const t3 = performance.now();
+    setStatus(`ready — decode ${(t1 - t0).toFixed(0)}ms, gunzip ${(t2 - t1).toFixed(0)}ms (${(wasmBytes.length / 1048576).toFixed(1)}MB), instantiate ${(t3 - t2).toFixed(0)}ms`);
+    runBtn.disabled = false;
+  } catch (e) {
+    setStatus(`init failed: ${e.name}: ${e.message}`, true);
+    throw e;
+  }
+}
+
+async function run() {
+  runBtn.disabled = true;
+  outEl.textContent = ""; $("verdict").textContent = ""; $("verdict").className = ""; $("timing").textContent = "";
+  try {
+    if (!z3 || dirty || !REUSE_INSTANCE) {
+      setStatus("starting fresh solver instance…"); await paint();
+      z3 = await makeInstance(); dirty = false;
+    }
+    setStatus("solving… (page is busy until Z3 returns)"); await paint();
+    const args = ["-smt2"];
+    const t = parseInt($("timeout").value, 10);
+    if (t > 0) args.push("-T:" + t);
+    const t0 = performance.now();
+    let code = 0;
+    try {
+      z3.FS.writeFile("/in.smt2", $("src").value);
+      code = z3.callMain([...args, "/in.smt2"]) | 0;
+      if (REUSE_INSTANCE) dirty = false;
+    } catch (e) {
+      if (e && e.name === "ExitStatus") { code = e.status; }
+      else { appendOut(`${e.name || "Error"}: ${e.message || e}`, true); dirty = true; }
+    }
+    const ms = performance.now() - t0;
+    const text = outEl.textContent;
+    const verdict = /(^|\n)unsat\b/.test(text) ? "unsat"
+      : /(^|\n)sat\b/.test(text) ? "sat"
+      : /(^|\n)unknown\b/.test(text) ? "unknown" : "";
+    if (verdict) { $("verdict").textContent = verdict; $("verdict").className = verdict === "sat" ? "sat" : verdict === "unsat" ? "unsat" : ""; }
+    $("timing").textContent = `${ms.toFixed(0)} ms` + (code ? ` · exit ${code}` : "");
+    setStatus(dirty ? "solver errored — next run starts a fresh instance" : "ready", dirty);
+  } catch (e) {
+    setStatus(`run failed: ${e.name}: ${e.message}`, true);
+    dirty = true;
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+runBtn.addEventListener("click", run);
+$("reset").addEventListener("click", async () => {
+  dirty = false; z3 = null; runBtn.disabled = true;
+  setStatus("starting fresh solver instance…"); await paint();
+  z3 = await makeInstance();
+  setStatus("ready (fresh instance)"); runBtn.disabled = false;
+});
+$("examples").addEventListener("change", (e) => {
+  if (EXAMPLES[e.target.value]) $("src").value = EXAMPLES[e.target.value];
+  e.target.value = "";
+});
+$("src").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !runBtn.disabled) { e.preventDefault(); run(); }
+});
+$("src").value = EXAMPLES.arith;
+init();
+</script>
+</body>
+</html>
