@@ -28,11 +28,11 @@ if [ ! -d "$SRC" ]; then
 fi
 
 # Z3 needs real C++ exception catching (parser/solver errors are exceptions).
-# The JS-based catching (-fexceptions + DISABLE_EXCEPTION_CATCHING=0) is the
-# battle-tested path used by the official z3-solver npm build.
-CXXFLAGS="-fexceptions -Oz"
-LDFLAGS="-Oz -fexceptions \
- -sDISABLE_EXCEPTION_CATCHING=0 \
+# Z3 >= 5.0.0 unconditionally links with native wasm EH (-fwasm-exceptions,
+# SUPPORT_LONGJMP=wasm) on Emscripten and dropped the legacy JS-based EH, so we
+# compile the objects the same way. Supported by all modern browsers and node.
+CXXFLAGS="-fwasm-exceptions -Oz"
+LDFLAGS="-Oz -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
  -sMODULARIZE=1 -sEXPORT_NAME=createZ3 -sEXPORT_ES6=0 \
  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=20971520 \
  -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
