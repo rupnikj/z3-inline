@@ -80,7 +80,9 @@
 <footer>
   Z3 __Z3_VERSION__ compiled with Emscripten (-Oz, single-threaded, polling timer).
   Payload: __PAYLOAD_NOTE__. The solver runs on the main thread &mdash; the page freezes
-  while solving; the timeout above is enforced by Z3 itself (-T).
+  while solving. The timeout is Z3's cooperative soft timeout (-t): the solver checks it
+  at internal checkpoints and answers <code>unknown</code>, so queries stuck deep in
+  big-number arithmetic can overrun it.
 </footer>
 
 <script id="wasm-b64" type="text/plain">__WASM_B64__</script>
@@ -91,8 +93,10 @@ __GLUE_JS__
 "use strict";
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status"), outEl = $("out"), runBtn = $("run");
-// Flip to false if a build's callMain cannot be re-invoked in one instance
-// (then every Run gets a fresh instance; costs ~1s but is always correct).
+// false (the default, set by make-artifact.mjs): fresh instance per Run,
+// ~1s, always correct. callMain re-entry keeps the previous input file in
+// Z3's global argv state and can answer for the stale file — do not enable
+// reuse unless that is fixed upstream.
 const REUSE_INSTANCE = __REUSE_INSTANCE__;
 
 const EXAMPLES = {
@@ -165,9 +169,12 @@ async function run() {
       z3 = await makeInstance(); dirty = false;
     }
     setStatus("solving… (page is busy until Z3 returns)"); await paint();
+    // -t is Z3's cooperative soft timeout (milliseconds). The hard timeout -T
+    // needs an alarm thread this single-threaded build doesn't have (it throws
+    // WebAssembly.Exception immediately) — never use it here.
     const args = ["-smt2"];
     const t = parseInt($("timeout").value, 10);
-    if (t > 0) args.push("-T:" + t);
+    if (t > 0) args.push("-t:" + Math.round(t * 1000));
     const t0 = performance.now();
     let code = 0;
     try {

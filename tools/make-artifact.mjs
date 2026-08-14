@@ -1,5 +1,10 @@
 // Assemble dist/z3-artifact.html from dist/z3-st.{js,wasm} + the template.
-// Run: node tools/make-artifact.mjs [--reuse=false]
+// Run: node tools/make-artifact.mjs [--reuse=true]
+//
+// Instance reuse is OFF by default: callMain re-entry keeps the previous run's
+// input file in Z3's global argv state ("WARNING: input file was already
+// specified") and can answer for the stale file. Fresh instance per run
+// (~1s) is always correct.
 //
 // Pipeline: gzip wasm -> base64 -> inline as text/plain script; glue inlined
 // as a classic script (defines global createZ3). The page never fetches.
@@ -11,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 const MAX_HTML = 20 * 1048576;
-const reuse = !process.argv.includes("--reuse=false");
+const reuse = process.argv.includes("--reuse=true");
 
 const wasm = readFileSync(join(dist, "z3-st.wasm"));
 let glue = readFileSync(join(dist, "z3-st.js"), "utf8");

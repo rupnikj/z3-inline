@@ -2,12 +2,15 @@
 //
 // Gates (any failure exits 1):
 //   1. glue loads with wasmBinary and NEVER touches the network (fetch is sabotaged)
-//   2. unsat case answers "unsat"
-//   3. sat case answers "sat" and produces a model
-//   4. arithmetic case solves a+b=10, a-b=4 -> a=7, b=3
+//   2. unsat / sat+model / arithmetic answers, each via the UI's EXACT invocation
+//      (fresh instance, ["-smt2", "-t:<ms>", file]) — not bare callMain; the -T
+//      regression lived at the invocation layer and solver-level tests missed it
+//   3. soft timeout: a hostile query with -t:500 returns "unknown" without
+//      throwing, in well under 10s
+//   4. fresh-instance isolation: a different input file after a previous run
+//      gets the correct answer (callMain re-entry in ONE instance keeps stale
+//      argv — that mode is off in the UI and only reported here as INFO)
 //   5. gzipped wasm <= 14MB (artifact payload budget)
-// Informational (printed, not a gate): whether callMain can be reused in one
-// instance, or whether the artifact must re-create the module per query.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -18,7 +21,7 @@ const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const wasmBinary = readFileSync(join(dist, "z3-st.wasm"));
 const glue = readFileSync(join(dist, "z3-st.js"), "utf8");
 
-// Gate 1a: any network attempt by the glue must blow up loudly.
+// Gate 1: any network attempt by the glue must blow up loudly.
 globalThis.fetch = () => { throw new Error("GATE FAILURE: glue called fetch()"); };
 globalThis.XMLHttpRequest = function () { throw new Error("GATE FAILURE: glue used XHR"); };
 
@@ -44,11 +47,29 @@ async function freshInstance(out) {
   });
 }
 
-function runQuery(z3, out, smt2, extraArgs = []) {
-  out.length = 0;
-  z3.FS.writeFile("/in.smt2", smt2);
-  z3.callMain(["-smt2", ...extraArgs, "/in.smt2"]);
+// KEEP IN SYNC with tools/artifact-template.html run(): fresh instance,
+// -smt2, cooperative soft timeout -t in milliseconds (NEVER -T: the hard
+// timeout needs an alarm thread and throws WebAssembly.Exception here).
+const uiArgs = (timeoutSec) => ["-smt2", "-t:" + Math.round(timeoutSec * 1000)];
+async function uiRun(smt2, timeoutSec = 30, file = "/in.smt2") {
+  const out = [];
+  const z3 = await freshInstance(out);
+  z3.FS.writeFile(file, smt2);
+  z3.callMain([...uiArgs(timeoutSec), file]);
   return out.join("\n");
+}
+
+// 12 pigeons / 11 holes: unsat, and the SAT-core search polls the timeout
+// checkpoints constantly, so -t reliably interrupts it.
+function pigeonhole(n) {
+  const lines = [];
+  for (let p = 0; p < n; p++) for (let h = 0; h < n - 1; h++) lines.push(`(declare-const p${p}h${h} Bool)`);
+  for (let p = 0; p < n; p++) lines.push(`(assert (or ${Array.from({ length: n - 1 }, (_, h) => `p${p}h${h}`).join(" ")}))`);
+  for (let h = 0; h < n - 1; h++)
+    for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++)
+      lines.push(`(assert (or (not p${a}h${h}) (not p${b}h${h})))`);
+  lines.push("(check-sat)");
+  return lines.join("\n");
 }
 
 const CASES = [
@@ -69,30 +90,50 @@ const CASES = [
   },
 ];
 
-// Gates 2-4, each on a fresh instance (the guaranteed-correct mode).
+// Gate 2: the three solver answers, via the exact UI invocation.
 for (const c of CASES) {
-  const out = [];
   try {
-    const z3 = await freshInstance(out);
-    const o = runQuery(z3, out, c.smt2);
-    check(c.name, c.ok(o), o);
+    const o = await uiRun(c.smt2);
+    check("ui-invocation " + c.name, c.ok(o), o);
   } catch (e) {
-    check(c.name, false, e.stack || String(e));
+    check("ui-invocation " + c.name, false, e.stack || String(e));
   }
 }
 
-// Informational: can one instance serve multiple queries?
+// Gate 3: cooperative soft timeout interrupts a hostile query gracefully.
+try {
+  const t0 = Date.now();
+  const o = await uiRun(pigeonhole(12), 0.5);
+  const ms = Date.now() - t0;
+  check("soft-timeout", o.includes("unknown") && ms < 10000, `output: ${o} (${ms}ms)`);
+} catch (e) {
+  check("soft-timeout", false, e.stack || String(e));
+}
+
+// Gate 4: fresh instances are isolated — a second run with a DIFFERENT file
+// path must answer for its own input (this is what the UI relies on).
+try {
+  await uiRun(CASES[0].smt2, 30, "/a.smt2");
+  const o = await uiRun("(declare-const q Int)(assert (> q 5))(check-sat)", 30, "/b.smt2");
+  check("fresh-instance-isolation", /(^|\n)sat/.test(o) && !o.includes("already specified"), o);
+} catch (e) {
+  check("fresh-instance-isolation", false, e.stack || String(e));
+}
+
+// Informational: callMain re-entry in ONE instance is known-broken (stale argv).
 try {
   const out = [];
   const z3 = await freshInstance(out);
-  const first = runQuery(z3, out, CASES[0].smt2);
-  const second = runQuery(z3, out, CASES[2].smt2);
-  const reuseOk = CASES[0].ok(first) && CASES[2].ok(second);
-  console.log(`INFO reuse-callMain-in-one-instance: ${reuseOk ? "WORKS" : "BROKEN (artifact must re-create per query)"}`);
-  if (!reuseOk) console.log("INFO second-query output was:\n" + second);
+  z3.FS.writeFile("/a.smt2", CASES[0].smt2);
+  z3.callMain([...uiArgs(30), "/a.smt2"]);
+  out.length = 0;
+  z3.FS.writeFile("/b.smt2", "(declare-const q Int)(assert (> q 5))(check-sat)");
+  z3.callMain([...uiArgs(30), "/b.smt2"]);
+  const o = out.join("\n");
+  const clean = /(^|\n)sat/.test(o) && !o.includes("already specified");
+  console.log(`INFO reuse-callMain-in-one-instance: ${clean ? "WORKS" : "BROKEN (stale argv; keep REUSE_INSTANCE=false)"}`);
 } catch (e) {
-  console.log("INFO reuse-callMain-in-one-instance: THROWS (artifact must re-create per query)");
-  console.log("INFO " + (e.message || e));
+  console.log("INFO reuse-callMain-in-one-instance: THROWS (keep REUSE_INSTANCE=false)");
 }
 
 // Gate 5: payload budget.
@@ -100,9 +141,6 @@ const gz = gzipSync(wasmBinary, { level: 9 }).length;
 console.log(`INFO gzipped wasm: ${(gz / 1048576).toFixed(2)} MB`);
 check("gzip-budget<=14MB", gz <= 14 * 1048576);
 
-// Belt-and-braces: static scan for network probes reachable when wasmBinary is
-// provided is impossible statically, but the sabotage above already proved it
-// dynamically. Just record whether the strings exist at all.
 console.log(`INFO glue mentions instantiateStreaming: ${glue.includes("instantiateStreaming")} (harmless if gates passed)`);
 
 process.exit(failures ? 1 : 0);

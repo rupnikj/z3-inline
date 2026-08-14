@@ -27,10 +27,10 @@ node tools/make-artifact.mjs      # -> dist/z3-artifact.html
 ```js
 const z3 = await createZ3({ wasmBinary, print: console.log, printErr: console.error, noInitialRun: true });
 z3.FS.writeFile("/in.smt2", "(declare-const x Int)(assert (> x 5))(check-sat)");
-z3.callMain(["-smt2", "-T:30", "/in.smt2"]);
+z3.callMain(["-smt2", "-t:30000", "/in.smt2"]);
 ```
 
-The build uses a polling timer, so Z3's own `-T:<seconds>` soft timeout works without threads. The solver runs on the calling thread by design (sandboxes that allow workers don't need this package).
+Timeouts: use Z3's cooperative soft timeout `-t:<milliseconds>` — the solver checks it at internal checkpoints and answers `unknown` (queries stuck deep in big-number arithmetic can overrun it). The hard timeout `-T` needs an alarm thread this build doesn't have and throws `WebAssembly.Exception` immediately. One instance serves one `callMain`: re-entry keeps the previous input file in Z3's global argv state and can answer for the stale file, so create a fresh instance per query (~1s). The solver runs on the calling thread by design (sandboxes that allow workers don't need this package).
 
 ## Scope
 
