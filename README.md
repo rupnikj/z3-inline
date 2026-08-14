@@ -11,7 +11,7 @@ z3-inline packages a single-threaded Emscripten build of Z3 into a single self-c
 
 ## Pinned versions
 
-Z3 `4.15.8`, emsdk `4.0.23` (both in the workflow `env` block and overridable via `Z3_VERSION` for the build script).
+Z3 `5.0.0` (tag `z3-5.0.0`), emsdk `4.0.23` (both in the workflow `env` block and overridable via `Z3_VERSION` for the build script).
 
 ## Local build
 

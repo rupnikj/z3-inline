@@ -11,7 +11,7 @@
 #   z3.FS.writeFile("/in.smt2", "..."); z3.callMain(["-smt2", "/in.smt2"]);
 set -euo pipefail
 
-Z3_VERSION="${Z3_VERSION:-4.15.8}"
+Z3_VERSION="${Z3_VERSION:-5.0.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/build"
 DIST="$ROOT/dist"
