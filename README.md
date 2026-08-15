@@ -30,6 +30,27 @@ z3.FS.writeFile("/in.smt2", "(declare-const x Int)(assert (> x 5))(check-sat)");
 z3.callMain(["-smt2", "-t:30000", "/in.smt2"]);
 ```
 
+## Incremental sessions via the C API
+
+The same binary exports the C API for incremental solving (state persists across calls — no re-parsing/re-solving of an accumulated script):
+
+```js
+const z3 = await createZ3({ wasmBinary, noInitialRun: true });
+const cw = (n, r, a) => z3.cwrap(n, r, a);
+const cfg = cw("Z3_mk_config", "number", [])();
+cw("Z3_set_param_value", null, ["number", "string", "string"])(cfg, "timeout", "30000"); // API equivalent of -t
+const ctx = cw("Z3_mk_context", "number", ["number"])(cfg);
+cw("Z3_del_config", null, ["number"])(cfg);
+cw("Z3_set_error_handler", null, ["number", "number"])(ctx, 0); // else errors exit(1) -> thrown ExitStatus
+const evalSmt2 = cw("Z3_eval_smtlib2_string", "string", ["number", "string"]);
+evalSmt2(ctx, "(declare-const x Int)");
+evalSmt2(ctx, "(assert (> x 5))");
+evalSmt2(ctx, "(check-sat)"); // "sat" — state persisted across calls
+cw("Z3_del_context", null, ["number"])(ctx);
+```
+
+Notes: `cwrap`'s `"string"` return type copies the Z3-owned result immediately (it is only valid until the next call). With the NULL error handler installed, errors set `Z3_get_error_code` (readable via `Z3_get_error_msg`) and appear as `(error ...)` in the returned string; the context stays usable. Detect API availability with `typeof z3._Z3_eval_smtlib2_string === "function"` (older z3-st assets only have the CLI). Measured: 400 incremental exchanges ≈ 24ms in one context vs ~46s replaying a growing script through `callMain`.
+
 Timeouts: use Z3's cooperative soft timeout `-t:<milliseconds>` — the solver checks it at internal checkpoints and answers `unknown` (queries stuck deep in big-number arithmetic can overrun it). The hard timeout `-T` needs an alarm thread this build doesn't have and throws `WebAssembly.Exception` immediately. One instance serves one `callMain`: re-entry keeps the previous input file in Z3's global argv state and can answer for the stale file, so create a fresh instance per query (~1s). The solver runs on the calling thread by design (sandboxes that allow workers don't need this package).
 
 ## Scope

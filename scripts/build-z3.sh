@@ -37,7 +37,8 @@ LDFLAGS="-Oz -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=20971520 \
  -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
  -sFORCE_FILESYSTEM=1 \
- -sEXPORTED_RUNTIME_METHODS=FS,callMain \
+ -sEXPORTED_FUNCTIONS=_Z3_mk_config,_Z3_set_param_value,_Z3_mk_context,_Z3_del_context,_Z3_del_config,_Z3_eval_smtlib2_string,_Z3_get_error_code,_Z3_get_error_msg,_Z3_set_error_handler,_malloc,_free,_main \
+ -sEXPORTED_RUNTIME_METHODS=FS,callMain,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8 \
  -sENVIRONMENT=web,node"
 
 echo "== Configuring (single-threaded, polling timer, MinSizeRel)"
@@ -70,6 +71,10 @@ if ! grep -q "var createZ3" "$DIST/z3-st.js"; then
   echo "ERROR: glue does not declare 'var createZ3' - MODULARIZE/EXPORT_NAME output changed"
   exit 1
 fi
+if ! grep -q "Z3_eval_smtlib2_string" "$DIST/z3-st.js"; then
+  echo "ERROR: glue does not export Z3_eval_smtlib2_string - C API exports missing"
+  exit 1
+fi
 
 GZ_BYTES=$(gzip -9 -c "$DIST/z3-st.wasm" | wc -c | tr -d ' ')
 echo "== Sizes: wasm $(wc -c < "$DIST/z3-st.wasm" | tr -d ' ') bytes, gzipped $GZ_BYTES bytes, glue $(wc -c < "$DIST/z3-st.js" | tr -d ' ') bytes"
@@ -82,6 +87,7 @@ cat > "$DIST/build-info.json" <<EOF
 {
   "z3Version": "$Z3_VERSION",
   "emcc": "$(emcc --version | head -1 | sed 's/"/\\"/g')",
+  "apiExports": ["Z3_mk_config", "Z3_set_param_value", "Z3_mk_context", "Z3_del_context", "Z3_del_config", "Z3_eval_smtlib2_string", "Z3_get_error_code", "Z3_get_error_msg", "Z3_set_error_handler"],
   "wasmBytes": $(wc -c < "$DIST/z3-st.wasm" | tr -d ' '),
   "wasmGzipBytes": $GZ_BYTES,
   "glueBytes": $(wc -c < "$DIST/z3-st.js" | tr -d ' '),

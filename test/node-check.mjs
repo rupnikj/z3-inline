@@ -136,6 +136,97 @@ try {
   console.log("INFO reuse-callMain-in-one-instance: THROWS (keep REUSE_INSTANCE=false)");
 }
 
+// --- C API gates (incremental solver sessions; the point is that state
+// persists across Z3_eval_smtlib2_string calls, killing quadratic replay) ---
+function apiBind(z3) {
+  const cw = (n, r, a) => z3.cwrap(n, r, a);
+  return {
+    mkConfig: cw("Z3_mk_config", "number", []),
+    setParam: cw("Z3_set_param_value", null, ["number", "string", "string"]),
+    mkContext: cw("Z3_mk_context", "number", ["number"]),
+    delConfig: cw("Z3_del_config", null, ["number"]),
+    delContext: cw("Z3_del_context", null, ["number"]),
+    setErrorHandler: cw("Z3_set_error_handler", null, ["number", "number"]),
+    // cwrap "string" return copies the Z3-owned buffer immediately (it is only
+    // valid until the next call). "timeout" config param is the API's -t.
+    evalSmt2: cw("Z3_eval_smtlib2_string", "string", ["number", "string"]),
+    errCode: cw("Z3_get_error_code", "number", ["number"]),
+    errMsg: cw("Z3_get_error_msg", "string", ["number", "number"]),
+  };
+}
+function apiContext(api, timeoutMs = 30000) {
+  const cfg = api.mkConfig();
+  api.setParam(cfg, "timeout", String(timeoutMs));
+  const ctx = api.mkContext(cfg);
+  api.delConfig(cfg);
+  // NULL handler: without it Z3's default error handler calls exit(1), which
+  // surfaces as a thrown ExitStatus. With it, errors only set the error code.
+  api.setErrorHandler(ctx, 0);
+  return ctx;
+}
+
+try {
+  const z3 = await freshInstance([]);
+  const missing = ["_Z3_eval_smtlib2_string", "ccall", "cwrap", "UTF8ToString"].filter((k) => typeof z3[k] !== "function");
+  check("api-exports-present", missing.length === 0, "missing: " + missing.join(", "));
+  const api = apiBind(z3);
+
+  // Gate A1: state persists across separate eval calls.
+  const ctx = apiContext(api);
+  api.evalSmt2(ctx, "(declare-const x Int)");
+  api.evalSmt2(ctx, "(assert (> x 5))");
+  const a1 = api.evalSmt2(ctx, "(check-sat)");
+  check("api-incremental-session", a1.trim() === "sat", a1);
+
+  // Gate A2: push/pop.
+  api.evalSmt2(ctx, "(push)");
+  api.evalSmt2(ctx, "(assert false)");
+  const a2u = api.evalSmt2(ctx, "(check-sat)");
+  api.evalSmt2(ctx, "(pop)");
+  const a2s = api.evalSmt2(ctx, "(check-sat)");
+  check("api-push-pop", a2u.trim() === "unsat" && a2s.trim() === "sat", `push: ${a2u} pop: ${a2s}`);
+
+  // Gate A3: CLI and API agree on the same transcripts.
+  let parity = true, parityDetail = "";
+  for (const c of CASES) {
+    const cli = await uiRun(c.smt2);
+    const pctx = apiContext(api);
+    const viaApi = api.evalSmt2(pctx, c.smt2);
+    api.delContext(pctx);
+    const verdict = (o) => (/(^|\n)unsat\b/.test(o) ? "unsat" : /(^|\n)sat\b/.test(o) ? "sat" : "?");
+    if (verdict(cli) !== verdict(viaApi)) { parity = false; parityDetail += `${c.name}: cli=${verdict(cli)} api=${verdict(viaApi)}\n`; }
+  }
+  check("api-cli-parity", parity, parityDetail);
+
+  // Gate A4: error path is detectable and non-fatal.
+  const before = api.errCode(ctx);
+  const errOut = api.evalSmt2(ctx, "(assert (bogus))");
+  const code = api.errCode(ctx);
+  const msg = code ? api.errMsg(ctx, code) : "";
+  const usable = api.evalSmt2(ctx, "(check-sat)").trim() === "sat";
+  check("api-error-path", before === 0 && code !== 0 && msg.length > 0 && usable,
+    `code=${code} msg=${msg} errOut=${errOut} usable=${usable}`);
+
+  // Gate A5: no quadratic growth — 400 exchanges in one context.
+  const stamps = [];
+  const t0 = Date.now();
+  for (let i = 0; i < 400; i++) {
+    const s = Date.now();
+    api.evalSmt2(ctx, `(declare-const y${i} Int)(assert (> y${i} ${i}))(check-sat)`);
+    stamps.push(Date.now() - s);
+  }
+  const total = Date.now() - t0;
+  const med = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  const mFirst = med(stamps.slice(0, 100)), mLast = med(stamps.slice(-100));
+  console.log(`INFO api 400 exchanges: ${total}ms total, median first100=${mFirst}ms last100=${mLast}ms`);
+  check("api-timing-flat", total < 5000 && mLast <= mFirst + 5,
+    `total=${total}ms first100=${mFirst}ms last100=${mLast}ms`);
+
+  api.delContext(ctx);
+} catch (e) {
+  check("api-gates", false, e.stack || String(e));
+}
+
 // Gate 5: payload budget.
 const gz = gzipSync(wasmBinary, { level: 9 }).length;
 console.log(`INFO gzipped wasm: ${(gz / 1048576).toFixed(2)} MB`);
