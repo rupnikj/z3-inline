@@ -42,8 +42,14 @@ LDFLAGS="-Oz -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
  -sENVIRONMENT=web,node"
 
 echo "== Configuring (single-threaded, polling timer, MinSizeRel)"
+# TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY: configure checks compile without
+# linking. Otherwise the EXPORTED_FUNCTIONS in CMAKE_EXE_LINKER_FLAGS poison
+# every try_compile (test programs lack the Z3 symbols): FindThreads fails
+# (no Threads::Threads target -> generate error) and all -Werror support
+# checks silently report unsupported. Only bites on a cold CMake cache.
 emcmake cmake -S "$SRC" -B "$BUILD" \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
   -DZ3_SINGLE_THREADED=ON \
   -DZ3_POLLING_TIMER=ON \
   -DZ3_BUILD_LIBZ3_SHARED=OFF \
