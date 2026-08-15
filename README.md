@@ -11,7 +11,9 @@ z3-inline packages a single-threaded Emscripten build of Z3 into a single self-c
 
 ## Pinned versions
 
-Z3 `5.0.0` (tag `z3-5.0.0`), emsdk `4.0.23` (both in the workflow `env` block and overridable via `Z3_VERSION` for the build script).
+Z3 `4.16.0` (tag `z3-4.16.0`), emsdk `4.0.23` (both in the workflow `env` block and overridable via `Z3_VERSION` for the build script).
+
+Why 4.16.0 rather than the newer 5.0.0: Dafny bundles and defaults to Z3 4.16.0 on master/nightly (dafny-lang/dafny#6477), so this pin matches the solver the consuming Dafny build is tested against — and Dafny verification outcomes are famously Z3-version-sensitive (dafny-lang/dafny#6481). Z3 5.0.0 has no presence in the Dafny ecosystem (no solver-builds artifact, no upstream validation). The build detects which exception ABI the pinned source requires — Z3 4.x links libz3 with the legacy JS-based EH, 5.x with native wasm EH — and compiles to match, so either pin builds correctly; the choice is recorded as `exceptionAbi` in `build-info.json`.
 
 ## Local build
 

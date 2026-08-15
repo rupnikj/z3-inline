@@ -11,7 +11,7 @@
 #   z3.FS.writeFile("/in.smt2", "..."); z3.callMain(["-smt2", "/in.smt2"]);
 set -euo pipefail
 
-Z3_VERSION="${Z3_VERSION:-5.0.0}"
+Z3_VERSION="${Z3_VERSION:-4.16.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/build"
 DIST="$ROOT/dist"
@@ -27,12 +27,25 @@ if [ ! -d "$SRC" ]; then
   curl -fsSL "https://github.com/Z3Prover/z3/archive/refs/tags/z3-$Z3_VERSION.tar.gz" | tar -xz -C "$WORK"
 fi
 
-# Z3 needs real C++ exception catching (parser/solver errors are exceptions).
-# Z3 >= 5.0.0 unconditionally links with native wasm EH (-fwasm-exceptions,
-# SUPPORT_LONGJMP=wasm) on Emscripten and dropped the legacy JS-based EH, so we
-# compile the objects the same way. Supported by all modern browsers and node.
-CXXFLAGS="-fwasm-exceptions -Oz"
-LDFLAGS="-Oz -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
+# Z3 needs real C++ exception catching (parser/solver errors are exceptions), and
+# our objects must use the same exception ABI that Z3's own Emscripten block
+# links libz3 with: >= 5.0.0 forces native wasm EH, 4.x forces the legacy
+# JS-based EH. Mixing the two fails the link outright ("DISABLE_EXCEPTION_
+# CATCHING=0 is not compatible with -fwasm-exceptions"), so detect it from the
+# source tree instead of hardcoding it per pin.
+if grep -q '"-fwasm-exceptions"' "$SRC/CMakeLists.txt"; then
+  EH_ABI="wasm"
+  EH_CXX="-fwasm-exceptions"
+  EH_LD="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+else
+  EH_ABI="js"
+  EH_CXX="-fexceptions"
+  EH_LD="-fexceptions -sDISABLE_EXCEPTION_CATCHING=0"
+fi
+echo "== Exception ABI: $EH_ABI (from Z3 $Z3_VERSION sources)"
+
+CXXFLAGS="$EH_CXX -Oz"
+LDFLAGS="-Oz $EH_LD \
  -sMODULARIZE=1 -sEXPORT_NAME=createZ3 -sEXPORT_ES6=0 \
  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=20971520 \
  -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
@@ -93,6 +106,7 @@ cat > "$DIST/build-info.json" <<EOF
 {
   "z3Version": "$Z3_VERSION",
   "emcc": "$(emcc --version | head -1 | sed 's/"/\\"/g')",
+  "exceptionAbi": "$EH_ABI",
   "apiExports": ["Z3_mk_config", "Z3_set_param_value", "Z3_mk_context", "Z3_del_context", "Z3_del_config", "Z3_eval_smtlib2_string", "Z3_get_error_code", "Z3_get_error_msg", "Z3_set_error_handler"],
   "wasmBytes": $(wc -c < "$DIST/z3-st.wasm" | tr -d ' '),
   "wasmGzipBytes": $GZ_BYTES,

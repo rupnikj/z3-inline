@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  Z3_VERSION: "5.0.0"
+  Z3_VERSION: "4.16.0"
   EMSDK_VERSION: "4.0.23"
 
 jobs:
