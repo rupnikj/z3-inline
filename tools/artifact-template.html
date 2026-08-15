@@ -52,6 +52,15 @@
   #verdict { font-weight: 700; }
   #verdict.sat { color: var(--ok); } #verdict.unsat { color: var(--accent); }
   footer { margin-top: 1.2rem; color: var(--muted); font-size: .78rem; }
+  #suite { margin-top: 1.6rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  #suite h2 { font-size: 1rem; margin: 0 0 .6rem; }
+  #suite .wrap { overflow-x: auto; }
+  #suite table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  #suite th, #suite td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--border); }
+  #suite td.st { white-space: nowrap; font-weight: 600; }
+  #suite td.st.pass { color: var(--ok); } #suite td.st.fail { color: var(--err); }
+  #suite details { font-size: .8rem; } #suite pre { white-space: pre-wrap; word-break: break-word; margin: .3rem 0 0; }
+  #suite button { padding: .15rem .55rem; font-size: .8rem; }
 </style>
 </head>
 <body>
@@ -76,6 +85,16 @@
 
 <div class="row"><span id="verdict"></span><span id="timing" style="color:var(--muted);font-size:.85rem"></span></div>
 <pre id="out"></pre>
+
+<section id="suite" hidden>
+  <h2>Verification suite <button id="rerun-suite" disabled>Run again</button></h2>
+  <div class="wrap"><table>
+    <thead><tr><th>Problem</th><th>Expected</th><th>Result</th><th></th></tr></thead>
+    <tbody id="suite-body"></tbody>
+  </table></div>
+  <p style="color:var(--muted);font-size:.8rem">Each problem runs on a fresh solver instance with the invocation the editor above uses.
+  <a href="z3-artifact.html" download>Download z3-artifact.html</a> to attach the same self-contained solver in a claude.ai chat.</p>
+</section>
 
 <footer>
   Z3 __Z3_VERSION__ compiled with Emscripten (-Oz, single-threaded, polling timer).
@@ -127,13 +146,31 @@ function appendOut(line, isErr) {
   outEl.appendChild(span);
 }
 
-async function makeInstance() {
+async function makeInstance(onOut, onErr) {
   return createZ3({
     wasmBinary: wasmBytes,
-    print: (l) => appendOut(l, false),
-    printErr: (l) => appendOut(l, true),
+    print: onOut || ((l) => appendOut(l, false)),
+    printErr: onErr || ((l) => appendOut(l, true)),
     noInitialRun: true,
   });
+}
+
+// One fresh instance per query — see REUSE_INSTANCE note above.
+async function solve(smt2, timeoutSec) {
+  const lines = [];
+  const inst = await makeInstance((l) => lines.push(l), (l) => lines.push("E:" + l));
+  const args = ["-smt2"];
+  if (timeoutSec > 0) args.push("-t:" + Math.round(timeoutSec * 1000));
+  inst.FS.writeFile("/in.smt2", smt2);
+  const t0 = performance.now();
+  let code = 0;
+  try { code = inst.callMain([...args, "/in.smt2"]) | 0; }
+  catch (e) { if (e && e.name === "ExitStatus") code = e.status; else throw e; }
+  const text = lines.join("\n");
+  const verdict = /(^|\n)unsat\b/.test(text) ? "unsat"
+    : /(^|\n)sat\b/.test(text) ? "sat"
+    : /(^|\n)unknown\b/.test(text) ? "unknown" : "";
+  return { text, verdict, code, ms: performance.now() - t0 };
 }
 
 async function init() {
@@ -215,8 +252,82 @@ $("examples").addEventListener("change", (e) => {
 $("src").addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !runBtn.disabled) { e.preventDefault(); run(); }
 });
+// --- Demo verification suite (Pages build only; DEMO=false in the plain artifact) ---
+const DEMO = __DEMO__;
+function pigeonhole(n) {
+  const L = [];
+  for (let p = 0; p < n; p++) for (let h = 0; h < n - 1; h++) L.push(`(declare-const p${p}h${h} Bool)`);
+  for (let p = 0; p < n; p++) L.push(`(assert (or ${Array.from({ length: n - 1 }, (_, h) => `p${p}h${h}`).join(" ")}))`);
+  for (let h = 0; h < n - 1; h++)
+    for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++)
+      L.push(`(assert (or (not p${a}h${h}) (not p${b}h${h})))`);
+  L.push("(check-sat)");
+  return L.join("\n");
+}
+const SUITE = [
+  { name: "Integer bounds", expect: "unsat", timeout: 30, smt2: EXAMPLES.unsat },
+  { name: "Linear arithmetic (a=7, b=3)", expect: "sat", timeout: 30, smt2: EXAMPLES.arith,
+    extra: (o) => /\(a 7\)/.test(o) && /\(b 3\)/.test(o) },
+  { name: "Model generation", expect: "sat", timeout: 30, smt2: EXAMPLES.model,
+    extra: (o) => o.includes("define-fun") },
+  { name: "Eight queens", expect: "sat", timeout: 30, smt2: EXAMPLES["eight-queens"] },
+  { name: "Pigeonhole 12/11 · 500ms soft timeout", expect: "unknown", timeout: 0.5, smt2: pigeonhole(12) },
+];
+async function runSuite() {
+  $("rerun-suite").disabled = true;
+  const body = $("suite-body");
+  body.textContent = "";
+  const rows = SUITE.map((c) => {
+    const tr = document.createElement("tr");
+    const [tdName, tdExp, tdSt, tdAct] = ["", "", "st", ""].map((cls) => {
+      const td = document.createElement("td");
+      if (cls) td.className = cls;
+      tr.appendChild(td);
+      return td;
+    });
+    tdName.textContent = c.name;
+    tdExp.textContent = c.expect;
+    tdSt.textContent = "…";
+    const load = document.createElement("button");
+    load.textContent = "Load";
+    load.addEventListener("click", () => { $("src").value = c.smt2; $("timeout").value = c.timeout; });
+    tdAct.appendChild(load);
+    body.appendChild(tr);
+    return { tr, tdSt, tdAct };
+  });
+  let allPass = true;
+  for (let i = 0; i < SUITE.length; i++) {
+    const c = SUITE[i], r = rows[i];
+    r.tdSt.textContent = "running…";
+    await paint();
+    try {
+      const res = await solve(c.smt2, c.timeout);
+      const pass = res.verdict === c.expect && (!c.extra || c.extra(res.text));
+      allPass = allPass && pass;
+      r.tdSt.textContent = `${pass ? "✓" : "✗"} ${res.verdict || "no verdict"} · ${res.ms.toFixed(0)}ms`;
+      r.tdSt.classList.add(pass ? "pass" : "fail");
+      const det = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.textContent = "output";
+      const pre = document.createElement("pre");
+      pre.textContent = res.text;
+      det.append(sum, pre);
+      r.tdAct.appendChild(det);
+    } catch (e) {
+      allPass = false;
+      r.tdSt.textContent = `✗ ${e.name || "Error"}: ${e.message || e}`;
+      r.tdSt.classList.add("fail");
+    }
+  }
+  setStatus(allPass ? "verification suite: all problems passed" : "verification suite: FAILURES above", !allPass);
+  $("rerun-suite").disabled = false;
+}
+$("rerun-suite").addEventListener("click", runSuite);
+
 $("src").value = EXAMPLES.arith;
-init();
+init().then(() => {
+  if (DEMO) { $("suite").hidden = false; return runSuite(); }
+});
 </script>
 </body>
 </html>

@@ -116,12 +116,12 @@ jobs:
             dist/z3-artifact.html
 
   pages:
-    # Optional second target: same page on your own origin. Requires
-    # Settings -> Pages -> Source: GitHub Actions; harmless to fail otherwise.
+    # Demo page on the repo's own origin: index.html is the artifact page plus
+    # an auto-running verification suite; the plain z3-artifact.html is served
+    # alongside for download/attachment.
     if: github.ref == 'refs/heads/main'
-    needs: assemble
+    needs: test
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       pages: write
       id-token: write
@@ -129,11 +129,20 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
-          name: z3-artifact
-          path: site
-      - run: mv site/z3-artifact.html site/index.html
+          name: z3-st-dist
+          path: dist
+      - name: Assemble demo + plain artifact
+        run: |
+          node tools/make-artifact.mjs --demo --out=index.html
+          node tools/make-artifact.mjs
+          mkdir site
+          cp dist/index.html dist/z3-artifact.html site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

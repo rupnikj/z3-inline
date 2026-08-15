@@ -7,7 +7,7 @@ z3-inline packages a single-threaded Emscripten build of Z3 into a single self-c
 - `scripts/build-z3.sh` — builds Z3 (pinned tag, `Z3_SINGLE_THREADED=ON`, `Z3_POLLING_TIMER=ON`, MinSizeRel/-Oz, JS exception catching) into `dist/z3-st.{js,wasm}`. Gates: glue is thread-free, defines global `createZ3`, gzipped wasm ≤ 14MB.
 - `test/node-check.mjs` — acceptance gates: loads the glue with `fetch` sabotaged (any network probe fails the run), checks unsat / sat+model / arithmetic answers, reports whether `callMain` is reusable within one instance.
 - `tools/make-artifact.mjs` + `tools/artifact-template.html` — gzip+base64 the wasm, inline glue and payload into `dist/z3-artifact.html` (fails > 20MB).
-- `.github/workflows/build.yml` — build → test → assemble; tags `v*` publish a GitHub release with all three outputs; pushes to main also deploy the page to GitHub Pages (enable Settings → Pages → Source: GitHub Actions).
+- `.github/workflows/build.yml` — build → test → assemble; tags `v*` publish a GitHub release with all three outputs; pushes to main deploy the demo to GitHub Pages: <https://rupnikj.github.io/z3-inline/> — the artifact page plus an auto-running verification suite of baked-in problems (unsat/sat/model/eight-queens plus the pigeonhole soft-timeout case), with the plain `z3-artifact.html` served alongside for download.
 
 ## Pinned versions
 
