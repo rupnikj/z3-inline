@@ -10,6 +10,15 @@
       "exceptionAbi": "wasm",
       "suiteHash": "4cc5fa9cf2e6c8a2",
       "recorded": "2026-08-16"
+    },
+    "ci-ubuntu-x64": {
+      "cliMs": 1644,
+      "apiMs": 1642,
+      "z3Version": "4.16.0",
+      "exceptionAbi": "wasm",
+      "suiteHash": "4cc5fa9cf2e6c8a2",
+      "recorded": "2026-08-16",
+      "note": "Measured at PERF_REPS=3 on a GitHub ubuntu-latest x64 runner; CI now runs 5 reps, whose minimum can only be lower, so this baseline is conservative. Observed spread on that runner was 1644-1890ms, which is why the gate compares minimums rather than means."
     }
   }
 }

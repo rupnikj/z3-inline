@@ -74,6 +74,10 @@ jobs:
       - name: Performance gate
         env:
           PERF_ENV: ci-ubuntu-x64
+          # Shared runners occasionally serve a uniformly slow slot; more reps
+          # make the minimum robust to that. The gate compares minimums, so
+          # extra reps can only lower the measurement, never inflate it.
+          PERF_REPS: 5
         run: node test/perf-check.mjs
       - name: Upload perf measurement
         if: always()
