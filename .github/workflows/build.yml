@@ -71,6 +71,17 @@ jobs:
           path: dist
       - name: Acceptance gates
         run: node test/node-check.mjs
+      - name: Performance gate
+        env:
+          PERF_ENV: ci-ubuntu-x64
+        run: node test/perf-check.mjs
+      - name: Upload perf measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-result
+          path: dist/perf-result.json
+          if-no-files-found: warn
 
   assemble:
     needs: test
@@ -137,12 +148,21 @@ jobs:
         with:
           name: z3-st-dist
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: perf-result
+          path: perf
+        continue-on-error: true
       - name: Assemble demo + plain artifact
         run: |
           node tools/make-artifact.mjs --demo --out=index.html
           node tools/make-artifact.mjs
           mkdir site
           cp dist/index.html dist/z3-artifact.html site/
+          # Publish the build + perf numbers so they are readable without a
+          # GitHub token (CI job logs are not publicly accessible).
+          cp dist/build-info.json site/
+          cp perf/perf-result.json site/ 2>/dev/null || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

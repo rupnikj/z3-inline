@@ -28,24 +28,36 @@ if [ ! -d "$SRC" ]; then
 fi
 
 # Z3 needs real C++ exception catching (parser/solver errors are exceptions), and
-# our objects must use the same exception ABI that Z3's own Emscripten block
-# links libz3 with: >= 5.0.0 forces native wasm EH, 4.x forces the legacy
-# JS-based EH. Mixing the two fails the link outright ("DISABLE_EXCEPTION_
-# CATCHING=0 is not compatible with -fwasm-exceptions"), so detect it from the
-# source tree instead of hardcoding it per pin.
-if grep -q '"-fwasm-exceptions"' "$SRC/CMakeLists.txt"; then
-  EH_ABI="wasm"
-  EH_CXX="-fwasm-exceptions"
-  EH_LD="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
-else
-  EH_ABI="js"
-  EH_CXX="-fexceptions"
-  EH_LD="-fexceptions -sDISABLE_EXCEPTION_CATCHING=0"
+# every object plus the final link must agree on ONE exception ABI.
+#
+# We always use native wasm EH. Z3 5.x already does; Z3 4.x hardcodes the legacy
+# JS-based EH into libz3's link flags, so we patch that one line out. This is not
+# cosmetic: measured on test/perf-suite.smt2 with Z3 4.16.0, legacy JS EH costs
+# 2.04x solve time (1823ms vs 895ms) and +3.9MB of wasm for byte-identical
+# verdicts, because every call that can throw round-trips wasm->JS->wasm through
+# an invoke_* trampoline (72 of them, 86 extra wasm imports). Upstream moved to
+# wasm EH in 5.0.0 for the same reason, so this puts 4.x on the newer path.
+if grep -q '"-s DISABLE_EXCEPTION_CATCHING=0"' "$SRC/CMakeLists.txt"; then
+  echo "== Patching Z3 $Z3_VERSION sources: legacy JS EH -> native wasm EH"
+  python3 - "$SRC/CMakeLists.txt" <<'PATCH'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = '    "-s DISABLE_EXCEPTION_CATCHING=0"\n'
+if old in src:
+    open(path, "w").write(src.replace(old, '    "-fwasm-exceptions"\n    "-s SUPPORT_LONGJMP=wasm"\n'))
+PATCH
 fi
-echo "== Exception ABI: $EH_ABI (from Z3 $Z3_VERSION sources)"
+if grep -q '"-s DISABLE_EXCEPTION_CATCHING=0"' "$SRC/CMakeLists.txt"; then
+  echo "ERROR: could not remove Z3's legacy-EH link flag - CMakeLists layout changed."
+  echo "       Building anyway would either fail to link or silently produce the 2x-slower build."
+  exit 1
+fi
+EH_ABI="wasm"
+echo "== Exception ABI: $EH_ABI"
 
-CXXFLAGS="$EH_CXX -Oz"
-LDFLAGS="-Oz $EH_LD \
+CXXFLAGS="-fwasm-exceptions -Oz"
+LDFLAGS="-Oz -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
  -sMODULARIZE=1 -sEXPORT_NAME=createZ3 -sEXPORT_ES6=0 \
  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=20971520 \
  -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \

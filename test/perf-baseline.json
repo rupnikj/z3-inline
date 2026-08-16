@@ -1,0 +1,15 @@
+{
+  "_comment": "Baselines for test/perf-check.mjs. Times are the MINIMUM of PERF_REPS runs of the fixed workload test/perf-suite.smt2. Editing perf-suite.smt2 changes suiteHash and invalidates every entry (the gate fails loudly rather than comparing against different work). Re-record only for a deliberate, explained cost.",
+  "thresholdPct": 15,
+  "expectedVerdicts": { "sat": 200, "unsat": 400, "unknown": 0 },
+  "environments": {
+    "darwin-arm64": {
+      "cliMs": 896,
+      "apiMs": 894,
+      "z3Version": "4.16.0",
+      "exceptionAbi": "wasm",
+      "suiteHash": "4cc5fa9cf2e6c8a2",
+      "recorded": "2026-08-16"
+    }
+  }
+}
